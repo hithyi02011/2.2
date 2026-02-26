@@ -94,6 +94,98 @@ def display_person(person_map, pid):
     return str(pid)
 
 # =============================
+# 中文亲属称呼解析（以患者为基准）
+# =============================
+KINSHIP_ENTRIES = [
+    {"canonical":"本人","aliases":["我","自己","本人","患者"],"paths":[["本人"]],"generation":"同代"},
+    {"canonical":"配偶","aliases":["配偶","爱人","丈夫","妻子","老公","老婆"],"paths":[["配偶"]],"generation":"同代"},
+
+    {"canonical":"父亲","aliases":["父亲","爸爸","父","爹"],"paths":[["父亲"]],"generation":"上1代"},
+    {"canonical":"母亲","aliases":["母亲","妈妈","母","娘"],"paths":[["母亲"]],"generation":"上1代"},
+    {"canonical":"公公","aliases":["公公"],"paths":[["配偶","父亲"]],"generation":"上1代（姻亲）"},
+    {"canonical":"婆婆","aliases":["婆婆"],"paths":[["配偶","母亲"]],"generation":"上1代（姻亲）"},
+    {"canonical":"岳父","aliases":["岳父","丈人"],"paths":[["配偶","父亲"]],"generation":"上1代（姻亲）"},
+    {"canonical":"岳母","aliases":["岳母"],"paths":[["配偶","母亲"]],"generation":"上1代（姻亲）"},
+
+    {"canonical":"祖父（爷爷）","aliases":["祖父","爷爷"],"paths":[["父亲","父亲"]],"generation":"上2代"},
+    {"canonical":"祖母（奶奶）","aliases":["祖母","奶奶"],"paths":[["父亲","母亲"]],"generation":"上2代"},
+    {"canonical":"外祖父（外公）","aliases":["外祖父","外公","姥爷"],"paths":[["母亲","父亲"]],"generation":"上2代"},
+    {"canonical":"外祖母（外婆）","aliases":["外祖母","外婆","姥姥"],"paths":[["母亲","母亲"]],"generation":"上2代"},
+
+    {"canonical":"哥哥","aliases":["哥哥","兄"],"paths":[["父母的年长儿子"]],"generation":"同代"},
+    {"canonical":"弟弟","aliases":["弟弟","弟"],"paths":[["父母的年幼儿子"]],"generation":"同代"},
+    {"canonical":"姐姐","aliases":["姐姐","姊姊","姐"],"paths":[["父母的年长女儿"]],"generation":"同代"},
+    {"canonical":"妹妹","aliases":["妹妹","妹"],"paths":[["父母的年幼女儿"]],"generation":"同代"},
+
+    {"canonical":"伯父","aliases":["伯父","伯伯","大伯"],"paths":[["父亲","哥哥"]],"generation":"上1代（旁系）"},
+    {"canonical":"伯母","aliases":["伯母","大妈"],"paths":[["父亲","哥哥","配偶"]],"generation":"上1代（旁系姻亲）"},
+    {"canonical":"叔叔","aliases":["叔叔","叔父","小叔"],"paths":[["父亲","弟弟"]],"generation":"上1代（旁系）"},
+    {"canonical":"婶婶","aliases":["婶婶","婶母","婶子"],"paths":[["父亲","弟弟","配偶"]],"generation":"上1代（旁系姻亲）"},
+    {"canonical":"姑姑","aliases":["姑姑","姑妈","姑母"],"paths":[["父亲","姐妹"]],"generation":"上1代（旁系）"},
+    {"canonical":"姑父","aliases":["姑父"],"paths":[["父亲","姐妹","配偶"]],"generation":"上1代（旁系姻亲）"},
+    {"canonical":"舅舅","aliases":["舅舅","舅父","舅"],"paths":[["母亲","兄弟"]],"generation":"上1代（旁系）"},
+    {"canonical":"舅妈","aliases":["舅妈","舅母"],"paths":[["母亲","兄弟","配偶"]],"generation":"上1代（旁系姻亲）"},
+    {"canonical":"姨妈","aliases":["姨妈","阿姨","姨母"],"paths":[["母亲","姐妹"]],"generation":"上1代（旁系）"},
+    {"canonical":"姨父","aliases":["姨父","姨夫"],"paths":[["母亲","姐妹","配偶"]],"generation":"上1代（旁系姻亲）"},
+
+    {"canonical":"儿子","aliases":["儿子"],"paths":[["儿子"]],"generation":"下1代"},
+    {"canonical":"女儿","aliases":["女儿","闺女"],"paths":[["女儿"]],"generation":"下1代"},
+    {"canonical":"女婿","aliases":["女婿"],"paths":[["女儿","配偶"]],"generation":"下1代（姻亲）"},
+    {"canonical":"儿媳","aliases":["儿媳","媳妇"],"paths":[["儿子","配偶"]],"generation":"下1代（姻亲）"},
+
+    {"canonical":"侄子","aliases":["侄子"],"paths":[["兄弟","儿子"]],"generation":"下1代（旁系）"},
+    {"canonical":"侄女","aliases":["侄女"],"paths":[["兄弟","女儿"]],"generation":"下1代（旁系）"},
+    {"canonical":"外甥","aliases":["外甥"],"paths":[["姐妹","儿子"]],"generation":"下1代（旁系）"},
+    {"canonical":"外甥女","aliases":["外甥女"],"paths":[["姐妹","女儿"]],"generation":"下1代（旁系）"},
+
+    {"canonical":"堂兄弟姐妹","aliases":["堂哥","堂弟","堂姐","堂妹","堂兄","堂弟妹","堂兄弟姐妹"],"paths":[["父亲","兄弟","子女"]],"generation":"同代（旁系）"},
+    {"canonical":"表兄弟姐妹","aliases":["表哥","表弟","表姐","表妹","表兄弟姐妹"],"paths":[["母亲","兄弟姐妹","子女"],["父亲","姐妹","子女"]],"generation":"同代（旁系）"},
+]
+
+
+def _normalize_kinship_term(term: str):
+    if term is None:
+        return ""
+    s = str(term).strip().replace(" ", "")
+    for token in ["我是", "我", "患者", "先证者", "的", "关系"]:
+        s = s.replace(token, "")
+    return s
+
+
+def _path_to_text(path):
+    return "患者的" + "的".join(path)
+
+
+def parse_kinship_term(term: str):
+    key = _normalize_kinship_term(term)
+    if not key:
+        return []
+    hits = []
+    for entry in KINSHIP_ENTRIES:
+        aliases = [_normalize_kinship_term(x) for x in entry["aliases"] + [entry["canonical"]]]
+        if key in aliases:
+            hits.append(entry)
+    return hits
+
+
+def suggest_kinship_terms(prefix: str, limit=16):
+    key = _normalize_kinship_term(prefix)
+    if not key:
+        return []
+    pool = []
+    for e in KINSHIP_ENTRIES:
+        for a in [e["canonical"], *e["aliases"]]:
+            n = _normalize_kinship_term(a)
+            if key in n:
+                pool.append(a)
+    uniq = []
+    for x in pool:
+        if x not in uniq:
+            uniq.append(x)
+    return uniq[:limit]
+
+
+# =============================
 # A2：共同子女 -> 伴侣候选（用户确认）
 # =============================
 def detect_spouse_candidates_from_children(people):
@@ -1041,6 +1133,35 @@ with c3:
 
 with c4:
     use_spouse_candidate_confirm = st.checkbox("共同子女生成配偶候选（需确认）", value=True)
+
+st.markdown("## 中文亲属称呼智能转换（以患者为基准）")
+with st.expander("输入称呼，自动解释‘他/她是患者的谁’", expanded=False):
+    st.caption("覆盖范围：尽可能包含上两代、下1代及常见旁系称呼。示例：婶婶 / 舅妈 / 堂姐 / 外甥女。")
+    kinship_term = st.text_input("输入亲属称呼", value="", placeholder="例如：婶婶")
+
+    if kinship_term.strip():
+        matches = parse_kinship_term(kinship_term)
+        if matches:
+            for idx, m in enumerate(matches, start=1):
+                st.markdown(f"**{idx}. {m['canonical']}**（代际：{m['generation']}）")
+                for pth in m["paths"]:
+                    st.write(f"- {_path_to_text(pth)}")
+        else:
+            st.warning("未找到该称呼的标准映射。你可以换个常见叫法，或查看下面的联想词。")
+
+        suggestions = suggest_kinship_terms(kinship_term)
+        if suggestions:
+            st.caption("你可能想输入：" + "、".join(suggestions))
+
+    with st.popover("查看支持的称呼（完整列表）"):
+        grouped = {}
+        for e in KINSHIP_ENTRIES:
+            grouped.setdefault(e["generation"], []).append(e)
+        for g in ["上2代", "上1代", "上1代（旁系）", "上1代（旁系姻亲）", "上1代（姻亲）", "同代", "同代（旁系）", "下1代", "下1代（旁系）", "下1代（姻亲）"]:
+            if g in grouped:
+                st.markdown(f"**{g}**")
+                st.write("、".join(sorted({x["canonical"] for x in grouped[g]})))
+
 
 st.markdown("## B 模式：围绕人物添加/编辑关系（推荐）")
 
