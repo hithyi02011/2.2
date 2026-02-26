@@ -1,0 +1,1530 @@
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
+
+st.set_page_config(page_title="Pedigree Drawer (Family Blocks)", layout="wide")
+
+# =============================
+# 默认示例数据（含 spouse_id）
+# =============================
+DEFAULT_ROWS = [
+    {"id":"P4","name":"祖父(父系)","sex":"M","affected":True,  "deceased":True,  "father_id":"","mother_id":"","spouse_id":"P5","proband":False,"birth_order":None},
+    {"id":"P5","name":"祖母(父系)","sex":"F","affected":False, "deceased":False, "father_id":"","mother_id":"","spouse_id":"P4","proband":False,"birth_order":None},
+    {"id":"P6","name":"外祖父","sex":"M","affected":False, "deceased":False, "father_id":"","mother_id":"","spouse_id":"P7","proband":False,"birth_order":None},
+    {"id":"P7","name":"外祖母","sex":"F","affected":True,  "deceased":True,  "father_id":"","mother_id":"","spouse_id":"P6","proband":False,"birth_order":None},
+
+    {"id":"P2","name":"父亲","sex":"M","affected":False, "deceased":False, "father_id":"P4","mother_id":"P5","spouse_id":"P3","proband":False,"birth_order":None},
+    {"id":"P3","name":"母亲","sex":"F","affected":False, "deceased":False, "father_id":"P6","mother_id":"P7","spouse_id":"P2","proband":False,"birth_order":None},
+
+    {"id":"P8","name":"姐姐","sex":"F","affected":False, "deceased":False, "father_id":"P2","mother_id":"P3","spouse_id":"P14","proband":False,"birth_order":1},
+    {"id":"P1","name":"患者","sex":"F","affected":True,  "deceased":False, "father_id":"P2","mother_id":"P3","spouse_id":"P11","proband":True, "birth_order":2},
+    {"id":"P9","name":"弟弟","sex":"M","affected":True,  "deceased":True,  "father_id":"P2","mother_id":"P3","spouse_id":"","proband":False,"birth_order":3},
+    {"id":"P10","name":"妹妹","sex":"F","affected":True, "deceased":True,  "father_id":"P2","mother_id":"P3","spouse_id":"P16","proband":False,"birth_order":4},
+
+    {"id":"P11","name":"配偶","sex":"M","affected":False, "deceased":False, "father_id":"","mother_id":"","spouse_id":"P1","proband":False,"birth_order":None},
+    {"id":"P14","name":"姐夫","sex":"M","affected":False, "deceased":False, "father_id":"","mother_id":"","spouse_id":"P8","proband":False,"birth_order":None},
+    {"id":"P16","name":"妹夫","sex":"M","affected":False, "deceased":False, "father_id":"","mother_id":"","spouse_id":"P10","proband":False,"birth_order":None},
+
+    {"id":"P12","name":"儿子","sex":"M","affected":False, "deceased":False, "father_id":"P11","mother_id":"P1","spouse_id":"","proband":False,"birth_order":1},
+    {"id":"P13","name":"女儿","sex":"F","affected":False, "deceased":False, "father_id":"P11","mother_id":"P1","spouse_id":"","proband":False,"birth_order":2},
+
+    {"id":"P15","name":"侄子","sex":"M","affected":False, "deceased":False, "father_id":"P14","mother_id":"P8","spouse_id":"","proband":False,"birth_order":1},
+]
+
+# =============================
+# 基础工具
+# =============================
+def to_bool(v):
+    if isinstance(v, bool):
+        return v
+    if pd.isna(v):
+        return False
+    return str(v).strip().lower() in ["true", "1", "yes", "y", "是"]
+
+def to_int_or_none(v):
+    if pd.isna(v):
+        return None
+    s = str(v).strip()
+    if s == "":
+        return None
+    try:
+        return int(float(s))
+    except Exception:
+        return None
+
+def clean_id(v):
+    if pd.isna(v):
+        return None
+    s = str(v).strip()
+    return s if s else None
+
+def df_to_people(df: pd.DataFrame):
+    rows = []
+    for _, r in df.iterrows():
+        pid = clean_id(r.get("id", ""))
+        if not pid:
+            continue
+        rows.append({
+            "id": pid,
+            "name": str(r.get("name", "")).strip() or pid,
+            "sex": (str(r.get("sex", "U")).strip().upper() or "U"),
+            "affected": to_bool(r.get("affected", False)),
+            "deceased": to_bool(r.get("deceased", False)),
+            "father_id": clean_id(r.get("father_id", "")),
+            "mother_id": clean_id(r.get("mother_id", "")),
+            "spouse_id": clean_id(r.get("spouse_id", "")),
+            "proband": to_bool(r.get("proband", False)),
+            "birth_order": to_int_or_none(r.get("birth_order", None)),
+        })
+    return rows
+
+def get_person_map(people):
+    return {p["id"]: p for p in people}
+
+def find_proband_id(people):
+    for p in people:
+        if p.get("proband"):
+            return p["id"]
+    return None
+
+def display_person(person_map, pid):
+    if pid in person_map:
+        p = person_map[pid]
+        return f"{p.get('name', pid)}({pid})"
+    return str(pid)
+
+# =============================
+# A2：共同子女 -> 伴侣候选（用户确认）
+# =============================
+def detect_spouse_candidates_from_children(people):
+    person_map = get_person_map(people)
+    pair_children = {}
+
+    for child in people:
+        fid = child.get("father_id")
+        mid = child.get("mother_id")
+        cid = child.get("id")
+        if not fid or not mid:
+            continue
+        if fid == mid:
+            continue
+        if fid not in person_map or mid not in person_map:
+            continue
+        pair_children.setdefault((fid, mid), []).append(cid)
+
+    candidates = []
+    conflicts = []
+
+    for (fid, mid), child_ids in pair_children.items():
+        father = person_map[fid]
+        mother = person_map[mid]
+        f_sp = father.get("spouse_id")
+        m_sp = mother.get("spouse_id")
+
+        if f_sp == mid and m_sp == fid:
+            status = "already_paired"
+            can_apply = False
+        elif (not f_sp and not m_sp):
+            status = "both_empty"
+            can_apply = True
+        elif (f_sp == mid and not m_sp):
+            status = "fill_mother_side"
+            can_apply = True
+        elif (m_sp == fid and not f_sp):
+            status = "fill_father_side"
+            can_apply = True
+        else:
+            status = "conflict"
+            can_apply = False
+
+        item = {
+            "pair_key": f"{fid}__{mid}",
+            "a": fid,
+            "b": mid,
+            "a_name": father.get("name", fid),
+            "b_name": mother.get("name", mid),
+            "a_spouse_id": f_sp,
+            "b_spouse_id": m_sp,
+            "children": child_ids,
+            "status": status,
+            "can_apply": can_apply,
+        }
+        if status == "conflict":
+            conflicts.append(item)
+        else:
+            candidates.append(item)
+
+    return candidates, conflicts
+
+def apply_selected_spouse_candidates_to_df(df: pd.DataFrame, selected_pair_keys):
+    if df is None or len(df) == 0 or not selected_pair_keys:
+        return df.copy()
+    out = df.copy()
+
+    id_to_idx = {}
+    for idx, row in out.iterrows():
+        pid = clean_id(row.get("id", ""))
+        if pid and pid not in id_to_idx:
+            id_to_idx[pid] = idx
+
+    for pair_key in selected_pair_keys:
+        try:
+            a, b = pair_key.split("__", 1)
+        except ValueError:
+            continue
+        if a == b:
+            continue
+        if a not in id_to_idx or b not in id_to_idx:
+            continue
+
+        out.at[id_to_idx[a], "spouse_id"] = b
+        out.at[id_to_idx[b], "spouse_id"] = a
+    return out
+
+def candidate_status_text(status):
+    mapping = {
+        "both_empty": "双方未填配偶（可确认）",
+        "fill_mother_side": "可补全一侧配偶（可确认）",
+        "fill_father_side": "可补全一侧配偶（可确认）",
+        "already_paired": "已是配偶（无需处理）",
+        "conflict": "与现有配偶信息冲突（需人工处理）",
+    }
+    return mapping.get(status, status)
+
+# =============================
+# B 模式：个人卡片式关系编辑（写回 DataFrame）
+# =============================
+def normalize_df_columns(df: pd.DataFrame):
+    required_cols = [
+        "id","name","sex","affected","deceased",
+        "father_id","mother_id","spouse_id","proband","birth_order"
+    ]
+    out = df.copy()
+    for c in required_cols:
+        if c not in out.columns:
+            out[c] = None
+    return out[required_cols]
+
+def next_person_id(df: pd.DataFrame, prefix="P"):
+    df = normalize_df_columns(df)
+    used = set()
+    for _, row in df.iterrows():
+        pid = clean_id(row.get("id"))
+        if pid:
+            used.add(pid)
+
+    max_n = 0
+    for pid in used:
+        if pid.startswith(prefix):
+            tail = pid[len(prefix):]
+            if tail.isdigit():
+                max_n = max(max_n, int(tail))
+
+    n = max_n + 1
+    while f"{prefix}{n}" in used:
+        n += 1
+    return f"{prefix}{n}"
+
+def person_options_from_df(df: pd.DataFrame):
+    df = normalize_df_columns(df)
+    opts = []
+    for _, row in df.iterrows():
+        pid = clean_id(row.get("id"))
+        if not pid:
+            continue
+        name = str(row.get("name", "")).strip() or pid
+        opts.append((f"{name} ({pid})", pid))
+    opts.sort(key=lambda x: x[1])
+    return opts
+
+def _id_to_row_index(df: pd.DataFrame):
+    m = {}
+    for idx, row in df.iterrows():
+        pid = clean_id(row.get("id"))
+        if pid and pid not in m:
+            m[pid] = idx
+    return m
+
+def add_person_row(
+    df: pd.DataFrame,
+    name: str,
+    sex: str = "U",
+    affected: bool = False,
+    deceased: bool = False,
+    father_id=None,
+    mother_id=None,
+    spouse_id=None,
+    proband: bool = False,
+    birth_order=None,
+    new_id=None
+):
+    out = normalize_df_columns(df)
+
+    if new_id is None or not str(new_id).strip():
+        new_id = next_person_id(out)
+    else:
+        new_id = str(new_id).strip()
+
+    existing_ids = {clean_id(v) for v in out["id"].tolist()}
+    if new_id in existing_ids:
+        raise ValueError(f"id {new_id} 已存在，请换一个。")
+
+    row = {
+        "id": new_id,
+        "name": (name or new_id).strip(),
+        "sex": (sex or "U").upper(),
+        "affected": bool(affected),
+        "deceased": bool(deceased),
+        "father_id": father_id if father_id else "",
+        "mother_id": mother_id if mother_id else "",
+        "spouse_id": spouse_id if spouse_id else "",
+        "proband": bool(proband),
+        "birth_order": birth_order if birth_order not in ("", None) else None,
+    }
+    out = pd.concat([out, pd.DataFrame([row])], ignore_index=True)
+    return out, new_id
+
+def add_person_row_with_fixed_id(
+    df: pd.DataFrame,
+    fixed_id: str,
+    name: str,
+    sex: str = "U",
+    affected: bool = False,
+    deceased: bool = False,
+    father_id=None,
+    mother_id=None,
+    spouse_id=None,
+    proband: bool = False,
+    birth_order=None,
+):
+    return add_person_row(
+        df=df,
+        name=name,
+        sex=sex,
+        affected=affected,
+        deceased=deceased,
+        father_id=father_id,
+        mother_id=mother_id,
+        spouse_id=spouse_id,
+        proband=proband,
+        birth_order=birth_order,
+        new_id=fixed_id
+    )
+
+def set_spouse_relation(df: pd.DataFrame, a_id: str, b_id: str):
+    out = normalize_df_columns(df)
+    id_map = _id_to_row_index(out)
+    if a_id not in id_map or b_id not in id_map:
+        raise ValueError("设置配偶失败：人物不存在。")
+    if a_id == b_id:
+        raise ValueError("不能把自己设为配偶。")
+    out.at[id_map[a_id], "spouse_id"] = b_id
+    out.at[id_map[b_id], "spouse_id"] = a_id
+    return out
+
+def get_person_row_from_df(df: pd.DataFrame, person_id: str):
+    out = normalize_df_columns(df)
+    for _, row in out.iterrows():
+        pid = clean_id(row.get("id"))
+        if pid == person_id:
+            return row.to_dict()
+    return None
+
+def update_person_flags(df: pd.DataFrame, person_id: str, affected=None, deceased=None):
+    """
+    更新已有人物的 affected / deceased。传 None 表示不改。
+    """
+    out = normalize_df_columns(df)
+    id_map = _id_to_row_index(out)
+    if person_id not in id_map:
+        raise ValueError(f"人物 {person_id} 不存在。")
+    idx = id_map[person_id]
+    if affected is not None:
+        out.at[idx, "affected"] = bool(affected)
+    if deceased is not None:
+        out.at[idx, "deceased"] = bool(deceased)
+    return out
+
+def infer_parent_slot_for_selected(selected_person_row: dict):
+    sex = str(selected_person_row.get("sex", "U")).upper()
+    if sex == "M":
+        return "father"
+    if sex == "F":
+        return "mother"
+    return None
+
+def add_child_under_selected(
+    df: pd.DataFrame,
+    selected_id: str,
+    child_name: str,
+    child_sex: str = "U",
+    child_birth_order=None,
+    other_parent_id=None,
+    child_affected: bool = False,
+    child_deceased: bool = False,
+):
+    out = normalize_df_columns(df)
+    selected_row = get_person_row_from_df(out, selected_id)
+    if not selected_row:
+        raise ValueError("当前选中人物不存在。")
+
+    slot = infer_parent_slot_for_selected(selected_row)
+    father_id, mother_id = "", ""
+
+    if slot == "father":
+        father_id = selected_id
+        if other_parent_id:
+            mother_id = other_parent_id
+    elif slot == "mother":
+        mother_id = selected_id
+        if other_parent_id:
+            father_id = other_parent_id
+    else:
+        father_id = selected_id
+        if other_parent_id:
+            mother_id = other_parent_id
+
+    out, child_id = add_person_row(
+        out,
+        name=child_name,
+        sex=child_sex,
+        father_id=father_id,
+        mother_id=mother_id,
+        birth_order=child_birth_order,
+        affected=child_affected,
+        deceased=child_deceased
+    )
+    return out, child_id
+
+def add_sibling_of_selected(
+    df: pd.DataFrame,
+    selected_id: str,
+    sibling_name: str,
+    sibling_sex: str = "U",
+    sibling_birth_order=None,
+    sibling_affected: bool = False,
+    sibling_deceased: bool = False,
+):
+    out = normalize_df_columns(df)
+    selected_row = get_person_row_from_df(out, selected_id)
+    if not selected_row:
+        raise ValueError("当前选中人物不存在。")
+
+    father_id = clean_id(selected_row.get("father_id")) or ""
+    mother_id = clean_id(selected_row.get("mother_id")) or ""
+
+    out, sib_id = add_person_row(
+        out,
+        name=sibling_name,
+        sex=sibling_sex,
+        father_id=father_id,
+        mother_id=mother_id,
+        birth_order=sibling_birth_order,
+        affected=sibling_affected,
+        deceased=sibling_deceased
+    )
+    return out, sib_id
+
+def add_parent_for_selected(
+    df: pd.DataFrame,
+    selected_id: str,
+    parent_role: str,
+    parent_name: str,
+    parent_sex: str = None,
+    parent_affected: bool = False,
+    parent_deceased: bool = False,
+):
+    out = normalize_df_columns(df)
+    selected_row = get_person_row_from_df(out, selected_id)
+    if not selected_row:
+        raise ValueError("当前选中人物不存在。")
+
+    if parent_role not in ["father", "mother"]:
+        raise ValueError("parent_role 必须是 father 或 mother。")
+
+    if parent_sex is None:
+        parent_sex = "M" if parent_role == "father" else "F"
+
+    out, parent_id = add_person_row(
+        out,
+        name=parent_name,
+        sex=parent_sex,
+        affected=parent_affected,
+        deceased=parent_deceased
+    )
+    id_map = _id_to_row_index(out)
+    si = id_map[selected_id]
+
+    if parent_role == "father":
+        out.at[si, "father_id"] = parent_id
+    else:
+        out.at[si, "mother_id"] = parent_id
+
+    return out, parent_id
+
+# =============================
+# 校验
+# =============================
+def validate_people(people):
+    ids = [p.get("id") for p in people]
+    if any(not i for i in ids):
+        raise ValueError("每个人都必须有 id。")
+    if len(ids) != len(set(ids)):
+        raise ValueError("存在重复 id（id 不能重复）。")
+
+    person_map = get_person_map(people)
+    id_set = set(person_map.keys())
+
+    for p in people:
+        if p["sex"] not in ["M", "F", "U"]:
+            raise ValueError(f"{p['id']} 的 sex 必须是 M/F/U。")
+        for k in ["father_id", "mother_id", "spouse_id"]:
+            v = p.get(k)
+            if v and v not in id_set:
+                raise ValueError(f"{p['id']} 的 {k}={v} 不存在。")
+        if p.get("spouse_id") == p["id"]:
+            raise ValueError(f"{p['id']} 的 spouse_id 不能指向自己。")
+
+    for p in people:
+        sid = p.get("spouse_id")
+        if sid:
+            other = person_map[sid]
+            if other.get("spouse_id") != p["id"]:
+                raise ValueError(
+                    f"婚配关系需成对填写：{p['id']}.spouse_id={sid}，但 {sid}.spouse_id 不是 {p['id']}"
+                )
+
+    probands = [p["id"] for p in people if p.get("proband")]
+    if len(probands) > 1:
+        raise ValueError(f"只能有一个患者（proband=True），当前有多个：{probands}")
+
+    fam_orders = {}
+    for p in people:
+        fid, mid, bo = p.get("father_id"), p.get("mother_id"), p.get("birth_order")
+        if fid and mid and bo is not None:
+            key = (fid, mid)
+            fam_orders.setdefault(key, set())
+            if bo in fam_orders[key]:
+                raise ValueError(f"同一父母({fid},{mid})下出现重复 birth_order={bo}")
+            fam_orders[key].add(bo)
+
+# =============================
+# 代际 / 家庭结构
+# =============================
+def compute_generations(people):
+    person_map = get_person_map(people)
+    gen = {}
+
+    def get_gen(pid, visiting=None):
+        if pid in gen:
+            return gen[pid]
+        if visiting is None:
+            visiting = set()
+        if pid in visiting:
+            return 0
+        visiting.add(pid)
+
+        p = person_map[pid]
+        parent_gens = []
+        for k in ["father_id", "mother_id"]:
+            par = p.get(k)
+            if par in person_map:
+                parent_gens.append(get_gen(par, visiting))
+        g = 0 if not parent_gens else max(parent_gens) + 1
+        gen[pid] = g
+        visiting.remove(pid)
+        return g
+
+    for pid in person_map:
+        get_gen(pid)
+    return gen
+
+def build_child_families(people):
+    person_map = get_person_map(people)
+
+    def child_sort_key(cid):
+        bo = person_map[cid].get("birth_order")
+        return (bo is None, bo if bo is not None else 999999, cid)
+
+    fams = {}
+    for p in people:
+        fid, mid = p.get("father_id"), p.get("mother_id")
+        if fid and mid:
+            fams.setdefault((fid, mid), []).append(p["id"])
+
+    for k in fams:
+        fams[k] = sorted(fams[k], key=child_sort_key)
+    return fams
+
+def build_spouse_pairs(people):
+    seen = set()
+    pairs = []
+    for p in people:
+        a = p["id"]
+        b = p.get("spouse_id")
+        if not b:
+            continue
+        key = tuple(sorted([a, b]))
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(key)
+    return pairs
+
+def person_children_map(child_fams):
+    m = {}
+    for (fid, mid), _children in child_fams.items():
+        m.setdefault(fid, []).append((fid, mid))
+        m.setdefault(mid, []).append((fid, mid))
+    return m
+
+# =============================
+# 家庭块布局（核心）
+# =============================
+def build_sibling_blocks(sibling_ids, person_map, child_fams, x_gap=160, spouse_gap=105, block_gap=120):
+    p2fams = person_children_map(child_fams)
+    blocks = []
+
+    for sid in sibling_ids:
+        sp = person_map[sid].get("spouse_id")
+        fam_keys = p2fams.get(sid, [])
+
+        preferred = None
+        if sp:
+            for k in fam_keys:
+                if set(k) == set([sid, sp]):
+                    preferred = k
+                    break
+        if preferred is None and fam_keys:
+            preferred = fam_keys[0]
+
+        children = child_fams.get(preferred, []) if preferred else []
+
+        couple_w = spouse_gap if sp else 0
+        child_w = (len(children) - 1) * x_gap if len(children) >= 2 else 0
+        width = max(90, couple_w, child_w) + block_gap
+
+        blocks.append({
+            "anchor": sid,
+            "spouse": sp,
+            "family_key": preferred,
+            "children": children,
+            "width": width,
+        })
+
+    return blocks
+
+def fallback_layout(people, gen, child_fams, x_gap, y_gap, margin_x, margin_y):
+    coords = {}
+    gen_to_ids = {}
+    for p in people:
+        gen_to_ids.setdefault(gen[p["id"]], []).append(p["id"])
+    for g in sorted(gen_to_ids.keys()):
+        y = margin_y + g * y_gap
+        x = margin_x
+        for pid in sorted(gen_to_ids[g]):
+            coords[pid] = (x, y)
+            x += x_gap
+    max_x = max(x for x, _ in coords.values()) if coords else 1000
+    max_y = max(y for _, y in coords.values()) if coords else 700
+    return coords, child_fams, int(max_x + 260), int(max_y + 300), gen
+
+def structured_layout(people):
+    validate_people(people)
+    person_map = get_person_map(people)
+    gen = compute_generations(people)
+    child_fams = build_child_families(people)
+
+    x_gap = 165
+    y_gap = 255
+    spouse_gap = 110
+    margin_x = 120
+    margin_y = 110
+    upper_side_gap = 220
+    block_gap = 125
+    reserve_gap = 240
+
+    coords = {}
+    proband_id = find_proband_id(people)
+
+    if not proband_id:
+        return fallback_layout(people, gen, child_fams, x_gap, y_gap, margin_x, margin_y)
+
+    proband = person_map[proband_id]
+    father_id = proband.get("father_id")
+    mother_id = proband.get("mother_id")
+
+    if father_id and mother_id and (father_id, mother_id) in child_fams:
+        sibling_ids = child_fams[(father_id, mother_id)][:]
+    else:
+        sibling_ids = [proband_id]
+    if proband_id not in sibling_ids:
+        sibling_ids.append(proband_id)
+
+    sibling_ids = sorted(sibling_ids, key=lambda pid: (
+        person_map[pid].get("birth_order") is None,
+        person_map[pid].get("birth_order") if person_map[pid].get("birth_order") is not None else 999999,
+        pid
+    ))
+
+    y_gp = margin_y
+    y_parents = margin_y + y_gap
+    y_sibs = margin_y + 2 * y_gap
+    y_desc = margin_y + 3 * y_gap
+    cx = margin_x + 760
+
+    if father_id:
+        coords[father_id] = (cx - spouse_gap / 2, y_parents)
+    if mother_id:
+        coords[mother_id] = (cx + spouse_gap / 2, y_parents)
+
+    if father_id in coords and mother_id in coords:
+        sib_center_x = (coords[father_id][0] + coords[mother_id][0]) / 2
+    else:
+        sib_center_x = cx
+
+    blocks = build_sibling_blocks(sibling_ids, person_map, child_fams, x_gap=x_gap, spouse_gap=spouse_gap, block_gap=block_gap)
+    total_w = sum(b["width"] for b in blocks) if blocks else 0
+    start_x = sib_center_x - total_w / 2
+
+    cursor = start_x
+    for b in blocks:
+        sid = b["anchor"]
+        sp = b["spouse"]
+        block_center = cursor + b["width"] / 2
+        if sp:
+            coords[sid] = (block_center - spouse_gap / 2, y_sibs)
+            coords[sp] = (block_center + spouse_gap / 2, y_sibs)
+        else:
+            coords[sid] = (block_center, y_sibs)
+        cursor += b["width"]
+
+    if father_id and father_id in person_map:
+        ff = person_map[father_id].get("father_id")
+        fm = person_map[father_id].get("mother_id")
+        if ff and fm:
+            fx, _ = coords[father_id]
+            coords[ff] = (fx - upper_side_gap / 2, y_gp)
+            coords[fm] = (fx + upper_side_gap / 2, y_gp)
+
+    if mother_id and mother_id in person_map:
+        mf = person_map[mother_id].get("father_id")
+        mm = person_map[mother_id].get("mother_id")
+        if mf and mm:
+            mx, _ = coords[mother_id]
+            coords[mf] = (mx - upper_side_gap / 2, y_gp)
+            coords[mm] = (mx + upper_side_gap / 2, y_gp)
+
+    for b in blocks:
+        fam_key = b["family_key"]
+        children = b["children"]
+        if not fam_key or not children:
+            continue
+        fid, mid = fam_key
+        if fid not in coords or mid not in coords:
+            continue
+
+        center_x = (coords[fid][0] + coords[mid][0]) / 2
+        n = len(children)
+        start_x_children = center_x - ((n - 1) * x_gap) / 2
+        for i, cid in enumerate(children):
+            coords[cid] = (start_x_children + i * x_gap, y_desc)
+
+    changed = True
+    loops = 0
+    while changed and loops < 3:
+        changed = False
+        loops += 1
+        for p in people:
+            a = p["id"]
+            b = p.get("spouse_id")
+            if not b:
+                continue
+            if a in coords and b not in coords:
+                ax, ay = coords[a]
+                tx = ax + spouse_gap
+                if any(abs(ox - tx) < 75 and abs(oy - ay) < 8 for pid2, (ox, oy) in coords.items() if pid2 != a):
+                    tx = ax - spouse_gap
+                coords[b] = (tx, ay)
+                changed = True
+
+    unplaced = [p["id"] for p in people if p["id"] not in coords]
+    if unplaced:
+        reserve_x = (max(x for x, _ in coords.values()) + reserve_gap) if coords else 1200
+        by_gen = {}
+        for pid in unplaced:
+            by_gen.setdefault(gen.get(pid, 0), []).append(pid)
+        for g in sorted(by_gen.keys()):
+            y = margin_y + g * y_gap
+            x = reserve_x
+            for pid in sorted(by_gen[g]):
+                coords[pid] = (x, y)
+                x += x_gap
+
+    xs = [x for x, _ in coords.values()] if coords else [0]
+    min_x, max_x = min(xs), max(xs)
+
+    if min_x < 60:
+        shift = 70 - min_x
+        for pid in list(coords.keys()):
+            x, y = coords[pid]
+            coords[pid] = (x + shift, y)
+        max_x += shift
+
+    width = int(max_x + 280)
+    height = int(max(y for _, y in coords.values()) + 330) if coords else 1000
+    return coords, child_fams, width, height, gen
+
+# =============================
+# SVG 绘制
+# =============================
+def esc(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def line(x1, y1, x2, y2, w=2.5):
+    return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="black" stroke-width="{w}" />'
+
+def choose_arrow_anchor(x, y, width, height, used=None):
+    if used is None:
+        used = []
+    candidates = [
+        (x - 105, y - 72, x - 28, y - 20),
+        (x + 105, y - 72, x + 28, y - 20),
+        (x - 105, y + 72, x - 28, y + 20),
+        (x + 105, y + 72, x + 28, y + 20),
+    ]
+    def score(c):
+        tx1, ty1, tx2, ty2 = c
+        penalty = 0
+        if tx1 < 10 or tx1 > width - 10 or ty1 < 45 or ty1 > height - 10:
+            penalty += 1000
+        for ex, ey in used:
+            if (tx1-ex)**2 + (ty1-ey)**2 < 95**2:
+                penalty += 250
+        if ty1 > y:
+            penalty += 20
+        return penalty
+    return min(candidates, key=score)
+
+def compute_label_positions(people, coords, base_offset=58):
+    rows = {}
+    for p in people:
+        pid = p["id"]
+        if pid not in coords:
+            continue
+        x, y = coords[pid]
+        row_key = round(y)
+        rows.setdefault(row_key, []).append((pid, x, y))
+
+    label_pos = {}
+    for row_key, items in rows.items():
+        row_label_y = row_key + base_offset
+        items.sort(key=lambda t: t[1])
+        for pid, x, _y in items:
+            label_pos[pid] = (x, row_label_y)
+    return label_pos
+
+def pedigree_to_svg(people, title="Pedigree", show_labels=True):
+    validate_people(people)
+    coords, child_fams, width, height, _gen = structured_layout(people)
+
+    r = 26
+    base_stroke = 2.6
+    proband_stroke = 3.8
+    spouse_line_w = 2.4
+    label_font = 12
+    label_offset = 58
+    child_bar_drop = 68
+
+    svg = []
+    svg.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" style="background:white">'
+    )
+    svg.append(
+        f'<text x="{width/2}" y="42" text-anchor="middle" font-size="22" '
+        f'font-family="Arial, Microsoft YaHei">{esc(title)}</text>'
+    )
+
+    # 夫妻线
+    for a, b in build_spouse_pairs(people):
+        if a not in coords or b not in coords:
+            continue
+        ax, ay = coords[a]
+        bx, _ = coords[b]
+        left_x, right_x = sorted([ax, bx])
+        svg.append(line(left_x, ay, right_x, ay, spouse_line_w))
+
+    # 父母-子代连线
+    for (fid, mid), children in child_fams.items():
+        if fid not in coords or mid not in coords or not children:
+            continue
+
+        fx, fy = coords[fid]
+        mx, _ = coords[mid]
+        spouse_y = fy
+        cx = (fx + mx) / 2
+        y_sib = spouse_y + child_bar_drop
+
+        svg.append(line(cx, spouse_y, cx, y_sib, spouse_line_w))
+        valid_children = [cid for cid in children if cid in coords]
+        if not valid_children:
+            continue
+
+        child_points = [(coords[cid][0], coords[cid][1]) for cid in valid_children]
+        xs = sorted([x for x, _ in child_points])
+
+        if len(xs) == 1:
+            svg.append(line(cx, y_sib, xs[0], y_sib, spouse_line_w))
+        else:
+            svg.append(line(xs[0], y_sib, xs[-1], y_sib, spouse_line_w))
+
+        for px, py in child_points:
+            svg.append(line(px, y_sib, px, py - r, spouse_line_w))
+
+    # 标签
+    label_positions = compute_label_positions(people, coords, base_offset=label_offset)
+
+    probands = []
+    for p in people:
+        pid = p["id"]
+        if pid not in coords:
+            continue
+        x, y = coords[pid]
+        sex = p.get("sex", "U")
+        affected = bool(p.get("affected", False))
+        deceased = bool(p.get("deceased", False))
+        proband = bool(p.get("proband", False))
+
+        if proband:
+            probands.append(pid)
+
+        fill = "black" if affected else "white"
+        stroke_w = proband_stroke if proband else base_stroke
+
+        if sex == "M":
+            svg.append(
+                f'<rect x="{x-r}" y="{y-r}" width="{2*r}" height="{2*r}" '
+                f'fill="{fill}" stroke="black" stroke-width="{stroke_w}" />'
+            )
+        elif sex == "F":
+            svg.append(
+                f'<circle cx="{x}" cy="{y}" r="{r}" fill="{fill}" '
+                f'stroke="black" stroke-width="{stroke_w}" />'
+            )
+        else:
+            pts = f"{x},{y-r} {x+r},{y} {x},{y+r} {x-r},{y}"
+            svg.append(
+                f'<polygon points="{pts}" fill="{fill}" stroke="black" stroke-width="{stroke_w}" />'
+            )
+
+        if deceased:
+            ex = r + 12
+            ey = r + 12
+            svg.append(line(x - ex, y + ey, x + ex, y - ey, 3.0))
+
+    if show_labels:
+        for p in people:
+            pid = p["id"]
+            if pid not in coords or pid not in label_positions:
+                continue
+            lx, ly = label_positions[pid]
+            svg.append(
+                f'<text x="{lx}" y="{ly}" text-anchor="middle" '
+                f'font-size="{label_font}" font-family="Arial, Microsoft YaHei">{esc(p.get("name", pid))}</text>'
+            )
+
+    # 先证者箭头
+    used_arrow_tails = []
+    for pid in probands:
+        x, y = coords[pid]
+        ax1, ay1, ax2, ay2 = choose_arrow_anchor(x, y, width, height, used_arrow_tails)
+        used_arrow_tails.append((ax1, ay1))
+        svg.append(line(ax1, ay1, ax2, ay2, 2.4))
+
+        dx = ax2 - ax1
+        dy = ay2 - ay1
+        if dx < 0 and dy < 0:
+            svg.append(line(ax2, ay2, ax2 + 9, ay2 + 2, 2.4))
+            svg.append(line(ax2, ay2, ax2 + 2, ay2 + 9, 2.4))
+        elif dx > 0 and dy < 0:
+            svg.append(line(ax2, ay2, ax2 - 9, ay2 + 2, 2.4))
+            svg.append(line(ax2, ay2, ax2 - 2, ay2 + 9, 2.4))
+        elif dx < 0 and dy > 0:
+            svg.append(line(ax2, ay2, ax2 + 9, ay2 - 2, 2.4))
+            svg.append(line(ax2, ay2, ax2 + 2, ay2 - 9, 2.4))
+        else:
+            svg.append(line(ax2, ay2, ax2 - 9, ay2 - 2, 2.4))
+            svg.append(line(ax2, ay2, ax2 - 2, ay2 - 9, 2.4))
+
+    svg.append("</svg>")
+    return "".join(svg)
+
+# =============================
+# UI
+# =============================
+st.title("家系图绘制器（网页填表版｜家庭块布局）")
+st.caption("2.2：前台创建/编辑人物时可直接标注患病/死亡；当前人物也可一键改状态。")
+
+# Session state
+if "pedigree_df" not in st.session_state:
+    st.session_state.pedigree_df = pd.DataFrame(DEFAULT_ROWS)
+
+if "spouse_candidate_cache" not in st.session_state:
+    st.session_state.spouse_candidate_cache = []
+if "spouse_conflict_cache" not in st.session_state:
+    st.session_state.spouse_conflict_cache = []
+if "spouse_candidate_selected" not in st.session_state:
+    st.session_state.spouse_candidate_selected = {}
+
+if "selected_person_id" not in st.session_state:
+    st.session_state.selected_person_id = None
+
+# Top controls
+c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+
+with c1:
+    if st.button("加载示例数据"):
+        st.session_state.pedigree_df = pd.DataFrame(DEFAULT_ROWS)
+        st.session_state.spouse_candidate_cache = []
+        st.session_state.spouse_conflict_cache = []
+        st.session_state.spouse_candidate_selected = {}
+        st.session_state.selected_person_id = None
+        st.rerun()
+
+with c2:
+    if st.button("清空表格"):
+        st.session_state.pedigree_df = pd.DataFrame(columns=[
+            "id","name","sex","affected","deceased","father_id","mother_id","spouse_id","proband","birth_order"
+        ])
+        st.session_state.spouse_candidate_cache = []
+        st.session_state.spouse_conflict_cache = []
+        st.session_state.spouse_candidate_selected = {}
+        st.session_state.selected_person_id = None
+        st.rerun()
+
+with c3:
+    show_labels = st.checkbox("显示姓名标签", value=True)
+
+with c4:
+    use_spouse_candidate_confirm = st.checkbox("共同子女生成配偶候选（需确认）", value=True)
+
+# =============================
+# B 模式：个人卡片式关系编辑器（主入口）
+# =============================
+st.markdown("## B 模式：围绕人物添加关系（推荐）")
+st.caption("先选中一个人物，再直接添加配偶 / 子女 / 兄弟姐妹 / 父母；并可在前台标注患病/死亡。")
+
+working_df = normalize_df_columns(st.session_state.pedigree_df)
+person_opts = person_options_from_df(working_df)
+
+# 空表时的起始人物创建（2.2 加患病/死亡）
+with st.expander("还没有人物？先创建一个起始人物", expanded=(len(person_opts) == 0)):
+    with st.form("form_create_root_person", clear_on_submit=True):
+        root_name = st.text_input("姓名/称谓", value="")
+        root_sex = st.selectbox("性别", options=["M", "F", "U"], index=2, key="root_person_sex")
+        root_proband = st.checkbox("设为患者/先证者（proband）", value=False)
+        root_affected = st.checkbox("患病(affected)", value=False)
+        root_deceased = st.checkbox("死亡(deceased)", value=False)
+        create_root_btn = st.form_submit_button("创建起始人物")
+        if create_root_btn:
+            try:
+                if not root_name.strip():
+                    raise ValueError("请填写姓名。")
+                new_df, new_id = add_person_row(
+                    working_df,
+                    name=root_name.strip(),
+                    sex=root_sex,
+                    proband=root_proband,
+                    affected=root_affected,
+                    deceased=root_deceased
+                )
+                st.session_state.pedigree_df = new_df
+                st.session_state.selected_person_id = new_id
+                st.rerun()
+            except Exception as e:
+                st.error(f"创建失败：{e}")
+
+if not person_opts:
+    st.info("当前还没有人物。先用上面的“创建起始人物”，或者在下方表格里手动新增。")
+else:
+    all_ids = [pid for _, pid in person_opts]
+    if st.session_state.selected_person_id not in all_ids:
+        st.session_state.selected_person_id = all_ids[0]
+
+    label_to_id = {label: pid for label, pid in person_opts}
+    id_to_label = {pid: label for label, pid in person_opts}
+
+    selected_label = st.selectbox(
+        "选择人物（个人卡片）",
+        options=[id_to_label[pid] for pid in all_ids],
+        index=all_ids.index(st.session_state.selected_person_id),
+        key="person_card_selectbox"
+    )
+    selected_id = label_to_id[selected_label]
+    st.session_state.selected_person_id = selected_id
+
+    # 刷新一次
+    working_df = normalize_df_columns(st.session_state.pedigree_df)
+    person_opts = person_options_from_df(working_df)
+    existing_ids = set([pid for _, pid in person_opts])
+    id_to_label = {pid: label for label, pid in person_opts}
+    selected_row = get_person_row_from_df(working_df, selected_id)
+
+    if selected_row:
+        c_info1, c_info2, c_info3, c_info4 = st.columns(4)
+        with c_info1:
+            st.metric("当前人物", f"{selected_row.get('name', '')} ({selected_id})")
+        with c_info2:
+            st.metric("性别", str(selected_row.get("sex", "U")))
+        with c_info3:
+            father_txt = clean_id(selected_row.get("father_id")) or "未填"
+            st.metric("父亲ID", father_txt)
+        with c_info4:
+            mother_txt = clean_id(selected_row.get("mother_id")) or "未填"
+            st.metric("母亲ID", mother_txt)
+
+        spouse_txt = clean_id(selected_row.get("spouse_id")) or "未填"
+        st.caption(f"配偶ID：{spouse_txt}")
+
+        # ===== 2.2：当前人物状态开关（不用去底层表格）=====
+        st.markdown("##### 当前人物状态（不用去底层表格改）")
+        status_c1, status_c2, status_c3 = st.columns([1, 1, 2])
+        cur_aff = bool(selected_row.get("affected", False))
+        cur_dec = bool(selected_row.get("deceased", False))
+        with status_c1:
+            new_aff = st.checkbox("患病", value=cur_aff, key=f"flag_aff_{selected_id}")
+        with status_c2:
+            new_dec = st.checkbox("死亡", value=cur_dec, key=f"flag_dec_{selected_id}")
+        with status_c3:
+            if st.button("更新当前人物状态", key=f"apply_flags_{selected_id}"):
+                try:
+                    new_df = update_person_flags(working_df, selected_id, affected=new_aff, deceased=new_dec)
+                    st.session_state.pedigree_df = new_df
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"更新失败：{e}")
+
+        # ===== B1.5：快速跳转 / 补建相关人物（2.2：补建时可选患病/死亡）=====
+        st.markdown("##### 快速跳转 / 补建相关人物")
+        jump_c1, jump_c2, jump_c3 = st.columns(3)
+
+        with jump_c1:
+            father_id_ref = clean_id(selected_row.get("father_id"))
+            st.write("**父亲**")
+            if father_id_ref:
+                if father_id_ref in existing_ids:
+                    if st.button(f"切换到父亲 {father_id_ref}", key=f"jump_father_{selected_id}"):
+                        st.session_state.selected_person_id = father_id_ref
+                        st.rerun()
+                else:
+                    st.caption(f"{father_id_ref}（仅引用，未建人物）")
+                    f_aff = st.checkbox("父亲患病", value=False, key=f"ref_father_aff_{selected_id}")
+                    f_dec = st.checkbox("父亲死亡", value=False, key=f"ref_father_dec_{selected_id}")
+                    if st.button(f"创建父亲 {father_id_ref} 并切换", key=f"create_father_ref_{selected_id}"):
+                        try:
+                            new_df, _ = add_person_row_with_fixed_id(
+                                working_df,
+                                fixed_id=father_id_ref,
+                                name="父亲",
+                                sex="M",
+                                affected=f_aff,
+                                deceased=f_dec
+                            )
+                            st.session_state.pedigree_df = new_df
+                            st.session_state.selected_person_id = father_id_ref
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"补建父亲失败：{e}")
+            else:
+                st.caption("未填写 father_id")
+
+        with jump_c2:
+            mother_id_ref = clean_id(selected_row.get("mother_id"))
+            st.write("**母亲**")
+            if mother_id_ref:
+                if mother_id_ref in existing_ids:
+                    if st.button(f"切换到母亲 {mother_id_ref}", key=f"jump_mother_{selected_id}"):
+                        st.session_state.selected_person_id = mother_id_ref
+                        st.rerun()
+                else:
+                    st.caption(f"{mother_id_ref}（仅引用，未建人物）")
+                    m_aff = st.checkbox("母亲患病", value=False, key=f"ref_mother_aff_{selected_id}")
+                    m_dec = st.checkbox("母亲死亡", value=False, key=f"ref_mother_dec_{selected_id}")
+                    if st.button(f"创建母亲 {mother_id_ref} 并切换", key=f"create_mother_ref_{selected_id}"):
+                        try:
+                            new_df, _ = add_person_row_with_fixed_id(
+                                working_df,
+                                fixed_id=mother_id_ref,
+                                name="母亲",
+                                sex="F",
+                                affected=m_aff,
+                                deceased=m_dec
+                            )
+                            st.session_state.pedigree_df = new_df
+                            st.session_state.selected_person_id = mother_id_ref
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"补建母亲失败：{e}")
+            else:
+                st.caption("未填写 mother_id")
+
+        with jump_c3:
+            spouse_id_ref = clean_id(selected_row.get("spouse_id"))
+            st.write("**配偶**")
+            if spouse_id_ref:
+                if spouse_id_ref in existing_ids:
+                    if st.button(f"切换到配偶 {spouse_id_ref}", key=f"jump_spouse_{selected_id}"):
+                        st.session_state.selected_person_id = spouse_id_ref
+                        st.rerun()
+                else:
+                    st.caption(f"{spouse_id_ref}（仅引用，未建人物）")
+                    current_sex = str(selected_row.get("sex", "U")).upper()
+                    guessed_spouse_sex = "F" if current_sex == "M" else ("M" if current_sex == "F" else "U")
+                    sp_aff = st.checkbox("配偶患病", value=False, key=f"ref_spouse_aff_{selected_id}")
+                    sp_dec = st.checkbox("配偶死亡", value=False, key=f"ref_spouse_dec_{selected_id}")
+                    if st.button(f"创建配偶 {spouse_id_ref} 并切换", key=f"create_spouse_ref_{selected_id}"):
+                        try:
+                            new_df, _ = add_person_row_with_fixed_id(
+                                working_df,
+                                fixed_id=spouse_id_ref,
+                                name="配偶",
+                                sex=guessed_spouse_sex,
+                                affected=sp_aff,
+                                deceased=sp_dec
+                            )
+                            new_df = set_spouse_relation(new_df, selected_id, spouse_id_ref)
+                            st.session_state.pedigree_df = new_df
+                            st.session_state.selected_person_id = spouse_id_ref
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"补建配偶失败：{e}")
+            else:
+                st.caption("未填写 spouse_id")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["添加配偶/伴侣", "添加子女", "添加兄弟姐妹", "添加父母"])
+
+    # --- 添加配偶 ---
+    with tab1:
+        t1a, t1b = st.columns(2)
+
+        with t1a:
+            with st.form("form_add_spouse_new", clear_on_submit=True):
+                st.markdown("**新建配偶/伴侣并绑定到当前人物**")
+                spouse_name = st.text_input("配偶/伴侣姓名", value="")
+                spouse_sex = st.selectbox("配偶性别", options=["M", "F", "U"], index=2, key="new_spouse_sex")
+                spouse_affected = st.checkbox("配偶患病", value=False)
+                spouse_deceased = st.checkbox("配偶死亡", value=False)
+                submitted_spouse = st.form_submit_button("添加新配偶/伴侣")
+                if submitted_spouse:
+                    try:
+                        if not spouse_name.strip():
+                            raise ValueError("请填写配偶姓名。")
+                        new_df, new_spouse_id = add_person_row(
+                            working_df,
+                            name=spouse_name.strip(),
+                            sex=spouse_sex,
+                            affected=spouse_affected,
+                            deceased=spouse_deceased
+                        )
+                        new_df = set_spouse_relation(new_df, selected_id, new_spouse_id)
+                        st.session_state.pedigree_df = new_df
+                        st.session_state.spouse_candidate_cache = []
+                        st.session_state.spouse_conflict_cache = []
+                        st.session_state.spouse_candidate_selected = {}
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"添加配偶失败：{e}")
+
+        with t1b:
+            with st.form("form_bind_existing_spouse", clear_on_submit=False):
+                st.markdown("**把已有的人物设为当前人物配偶**")
+                existing_spouse_opts = [x for x in person_opts if x[1] != selected_id]
+                if existing_spouse_opts:
+                    label_list = [x[0] for x in existing_spouse_opts]
+                    chosen_existing_label = st.selectbox("选择已有的人物", options=label_list, key="bind_existing_spouse_select")
+                    chosen_existing_id = dict(existing_spouse_opts)[chosen_existing_label]
+                    bind_existing_btn = st.form_submit_button("设为配偶")
+                    if bind_existing_btn:
+                        try:
+                            new_df = set_spouse_relation(working_df, selected_id, chosen_existing_id)
+                            st.session_state.pedigree_df = new_df
+                            st.session_state.spouse_candidate_cache = []
+                            st.session_state.spouse_conflict_cache = []
+                            st.session_state.spouse_candidate_selected = {}
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"绑定失败：{e}")
+                else:
+                    st.caption("暂无可选人物（至少需要 2 个人）。")
+                    st.form_submit_button("设为配偶", disabled=True)
+
+    # --- 添加子女 ---
+    with tab2:
+        with st.form("form_add_child", clear_on_submit=True):
+            st.markdown("**围绕当前人物添加子女**（根据当前人物性别自动放入 father_id 或 mother_id）")
+            child_name = st.text_input("子女姓名", value="")
+            child_sex = st.selectbox("子女性别", options=["M", "F", "U"], index=2, key="new_child_sex")
+            child_affected = st.checkbox("子女患病", value=False)
+            child_deceased = st.checkbox("子女死亡", value=False)
+            child_birth_order_raw = st.text_input("出生顺序（可选，填数字如 1/2/3）", value="")
+
+            selected_spouse_id = clean_id(selected_row.get("spouse_id")) if selected_row else None
+            other_parent_options = [("（留空）", "")]
+            if selected_spouse_id:
+                spouse_label = id_to_label.get(selected_spouse_id, f"{selected_spouse_id} ({selected_spouse_id})")
+                other_parent_options.append((f"当前配偶优先：{spouse_label}", selected_spouse_id))
+            for label, pid in person_opts:
+                if pid != selected_id and pid != selected_spouse_id:
+                    other_parent_options.append((label, pid))
+
+            other_parent_label = st.selectbox(
+                "另一个家长（可选）",
+                options=[x[0] for x in other_parent_options],
+                index=1 if selected_spouse_id else 0,
+                key="other_parent_for_child"
+            )
+            other_parent_id = dict(other_parent_options).get(other_parent_label, "")
+            submitted_child = st.form_submit_button("添加子女")
+
+            if submitted_child:
+                try:
+                    if not child_name.strip():
+                        raise ValueError("请填写子女姓名。")
+                    if other_parent_id == selected_id:
+                        raise ValueError("另一个家长不能选择当前人物自己。")
+                    bo = int(child_birth_order_raw.strip()) if str(child_birth_order_raw).strip() else None
+
+                    new_df, _child_id = add_child_under_selected(
+                        working_df,
+                        selected_id=selected_id,
+                        child_name=child_name.strip(),
+                        child_sex=child_sex,
+                        child_birth_order=bo,
+                        other_parent_id=other_parent_id or None,
+                        child_affected=child_affected,
+                        child_deceased=child_deceased
+                    )
+                    st.session_state.pedigree_df = new_df
+                    st.session_state.spouse_candidate_cache = []
+                    st.session_state.spouse_conflict_cache = []
+                    st.session_state.spouse_candidate_selected = {}
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"添加子女失败：{e}")
+
+    # --- 添加兄弟姐妹 ---
+    with tab3:
+        with st.form("form_add_sibling", clear_on_submit=True):
+            st.markdown("**添加当前人物的兄弟姐妹**（自动共享当前人物的父母）")
+            sib_name = st.text_input("兄弟姐妹姓名", value="")
+            sib_sex = st.selectbox("兄弟姐妹性别", options=["M", "F", "U"], index=2, key="new_sib_sex")
+            sib_affected = st.checkbox("兄弟姐妹患病", value=False)
+            sib_deceased = st.checkbox("兄弟姐妹死亡", value=False)
+            sib_birth_order_raw = st.text_input("出生顺序（可选，填数字如 1/2/3）", value="", key="sib_birth_order_input")
+            submitted_sib = st.form_submit_button("添加兄弟姐妹")
+            if submitted_sib:
+                try:
+                    if not sib_name.strip():
+                        raise ValueError("请填写兄弟姐妹姓名。")
+                    bo = int(sib_birth_order_raw.strip()) if str(sib_birth_order_raw).strip() else None
+                    new_df, _sib_id = add_sibling_of_selected(
+                        working_df,
+                        selected_id=selected_id,
+                        sibling_name=sib_name.strip(),
+                        sibling_sex=sib_sex,
+                        sibling_birth_order=bo,
+                        sibling_affected=sib_affected,
+                        sibling_deceased=sib_deceased
+                    )
+                    st.session_state.pedigree_df = new_df
+                    st.session_state.spouse_candidate_cache = []
+                    st.session_state.spouse_conflict_cache = []
+                    st.session_state.spouse_candidate_selected = {}
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"添加兄弟姐妹失败：{e}")
+
+    # --- 添加父母 ---
+    with tab4:
+        st.markdown("**给当前人物添加父亲或母亲**（新建人物并挂到当前人物）")
+        sub_c1, sub_c2 = st.columns(2)
+
+        with sub_c1:
+            with st.form("form_add_father", clear_on_submit=True):
+                father_name = st.text_input("父亲姓名", value="")
+                father_affected = st.checkbox("父亲患病", value=False)
+                father_deceased = st.checkbox("父亲死亡", value=False)
+                add_father_btn = st.form_submit_button("添加父亲")
+                if add_father_btn:
+                    try:
+                        if not father_name.strip():
+                            raise ValueError("请填写父亲姓名。")
+                        new_df, _ = add_parent_for_selected(
+                            working_df,
+                            selected_id=selected_id,
+                            parent_role="father",
+                            parent_name=father_name.strip(),
+                            parent_sex="M",
+                            parent_affected=father_affected,
+                            parent_deceased=father_deceased
+                        )
+                        st.session_state.pedigree_df = new_df
+                        st.session_state.spouse_candidate_cache = []
+                        st.session_state.spouse_conflict_cache = []
+                        st.session_state.spouse_candidate_selected = {}
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"添加父亲失败：{e}")
+
+        with sub_c2:
+            with st.form("form_add_mother", clear_on_submit=True):
+                mother_name = st.text_input("母亲姓名", value="")
+                mother_affected = st.checkbox("母亲患病", value=False)
+                mother_deceased = st.checkbox("母亲死亡", value=False)
+                add_mother_btn = st.form_submit_button("添加母亲")
+                if add_mother_btn:
+                    try:
+                        if not mother_name.strip():
+                            raise ValueError("请填写母亲姓名。")
+                        new_df, _ = add_parent_for_selected(
+                            working_df,
+                            selected_id=selected_id,
+                            parent_role="mother",
+                            parent_name=mother_name.strip(),
+                            parent_sex="F",
+                            parent_affected=mother_affected,
+                            parent_deceased=mother_deceased
+                        )
+                        st.session_state.pedigree_df = new_df
+                        st.session_state.spouse_candidate_cache = []
+                        st.session_state.spouse_conflict_cache = []
+                        st.session_state.spouse_candidate_selected = {}
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"添加母亲失败：{e}")
+
+# =============================
+# 底层表格（可检查/微调）
+# =============================
+st.markdown("### 底层数据表（可直接编辑 / 用于检查）")
+
+edited_df = st.data_editor(
+    st.session_state.pedigree_df,
+    num_rows="dynamic",
+    use_container_width=True,
+    column_config={
+        "id": st.column_config.TextColumn("id", help="唯一编号，例如 P1/P2"),
+        "name": st.column_config.TextColumn("姓名/称谓"),
+        "sex": st.column_config.SelectboxColumn("性别", options=["M", "F", "U"]),
+        "affected": st.column_config.CheckboxColumn("患病"),
+        "deceased": st.column_config.CheckboxColumn("死亡"),
+        "father_id": st.column_config.TextColumn("父亲id"),
+        "mother_id": st.column_config.TextColumn("母亲id"),
+        "spouse_id": st.column_config.TextColumn("配偶id"),
+        "proband": st.column_config.CheckboxColumn("患者(先证者)"),
+        "birth_order": st.column_config.NumberColumn("出生顺序", step=1, min_value=1),
+    },
+    key="data_editor_pedigree"
+)
+
+# =============================
+# A2：配偶候选（辅助）
+# =============================
+st.markdown("### 配偶候选（基于共同子女，可选辅助）")
+scan_c1, scan_c2 = st.columns([1, 3])
+
+with scan_c1:
+    if st.button("扫描配偶候选"):
+        try:
+            temp_people = df_to_people(edited_df)
+            candidates, conflicts = detect_spouse_candidates_from_children(temp_people)
+            st.session_state.spouse_candidate_cache = candidates
+            st.session_state.spouse_conflict_cache = conflicts
+            st.session_state.spouse_candidate_selected = {c["pair_key"]: True for c in candidates if c["can_apply"]}
+            st.rerun()
+        except Exception as e:
+            st.error(f"扫描失败：{e}")
+
+with scan_c2:
+    st.caption("只填了孩子的 father_id/mother_id，但没填 spouse_id 时，一键回填用。")
+
+candidates = st.session_state.spouse_candidate_cache
+conflicts = st.session_state.spouse_conflict_cache
+
+if use_spouse_candidate_confirm and (candidates or conflicts):
+    person_map_preview = get_person_map(df_to_people(edited_df))
+
+    if candidates:
+        st.markdown("#### 可确认的配偶候选")
+        for c in candidates:
+            a_txt = f"{c['a_name']}({c['a']})"
+            b_txt = f"{c['b_name']}({c['b']})"
+            child_txt = "，".join(display_person(person_map_preview, cid) for cid in c["children"]) or "无"
+            status_txt = candidate_status_text(c["status"])
+
+            if c["can_apply"]:
+                current_val = st.session_state.spouse_candidate_selected.get(c["pair_key"], True)
+                checked = st.checkbox(
+                    f"{a_txt} ↔ {b_txt} ｜ {status_txt} ｜ 共同子女：{child_txt}",
+                    value=current_val,
+                    key=f"cand_chk_{c['pair_key']}"
+                )
+                st.session_state.spouse_candidate_selected[c["pair_key"]] = checked
+            else:
+                st.caption(f"• {a_txt} ↔ {b_txt} ｜ {status_txt} ｜ 共同子女：{child_txt}")
+
+        if st.button("应用所选候选配偶关系（回填到表格）", type="secondary"):
+            try:
+                selected_keys = {k for k, v in st.session_state.spouse_candidate_selected.items() if v}
+                new_df = apply_selected_spouse_candidates_to_df(edited_df, selected_keys)
+                st.session_state.pedigree_df = new_df
+                try:
+                    st.session_state["data_editor_pedigree"] = new_df
+                except Exception:
+                    pass
+                st.rerun()
+            except Exception as e:
+                st.error(f"应用失败：{e}")
+
+    if conflicts:
+        st.markdown("#### 冲突候选（需人工处理）")
+        for c in conflicts:
+            a_txt = f"{c['a_name']}({c['a']})"
+            b_txt = f"{c['b_name']}({c['b']})"
+            a_sp = display_person(person_map_preview, c["a_spouse_id"]) if c["a_spouse_id"] else "空"
+            b_sp = display_person(person_map_preview, c["b_spouse_id"]) if c["b_spouse_id"] else "空"
+            child_txt = "，".join(display_person(person_map_preview, cid) for cid in c["children"])
+            st.warning(
+                f"{a_txt} & {b_txt}（共同子女：{child_txt}）与现有 spouse_id 冲突："
+                f"{a_txt} 当前配偶={a_sp}；{b_txt} 当前配偶={b_sp}"
+            )
+
+# =============================
+# 生成图
+# =============================
+graph_title = st.text_input("图标题", value="Pedigree")
+
+if st.button("生成家系图", type="primary"):
+    try:
+        st.session_state.pedigree_df = edited_df.copy()
+        people = df_to_people(edited_df)
+
+        if len(people) == 0:
+            st.warning("表格是空的，请先添加至少一位成员。")
+        else:
+            svg_html = pedigree_to_svg(people, title=graph_title, show_labels=show_labels)
+            st.markdown("### 生成结果")
+            components.html(svg_html, height=1100, scrolling=True)
+
+            with st.expander("查看当前结构化数据（调试用）", expanded=False):
+                st.json(people)
+    except Exception as e:
+        st.error(f"生成失败：{e}")
+
+with st.expander("2.2 使用说明（简短）", expanded=False):
+    st.markdown("""
+- **新建人物**（配偶/子女/兄弟姐妹/父母/起始人物）时，都可以勾选 **患病/死亡**。
+- **当前人物卡片**里也能直接改 **患病/死亡** 并点“更新当前人物状态”。
+- 底层表格仍保留：用于检查 id、父母/配偶引用、birth_order 等。
+""")
