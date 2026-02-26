@@ -1002,9 +1002,48 @@ def structured_layout(people):
     y_desc = margin_y + 3 * y_gap
     cx = margin_x + 760
 
-    if father_id:
+    def _parent_family_siblings(pid):
+        if not pid or pid not in person_map:
+            return []
+        gf = person_map[pid].get("father_id")
+        gm = person_map[pid].get("mother_id")
+        if gf and gm and (gf, gm) in child_fams:
+            return child_fams[(gf, gm)][:]
+        return [pid]
+
+    parent_anchor = father_id if father_id else mother_id
+    parent_sibling_ids = _parent_family_siblings(parent_anchor)
+    if parent_anchor and parent_anchor not in parent_sibling_ids:
+        parent_sibling_ids.append(parent_anchor)
+
+    parent_blocks = build_sibling_blocks(
+        parent_sibling_ids,
+        person_map,
+        child_fams,
+        x_gap=x_gap,
+        spouse_gap=spouse_gap,
+        block_gap=block_gap,
+    )
+
+    if parent_blocks:
+        parent_total_w = sum(b["width"] for b in parent_blocks)
+        parent_start_x = cx - parent_total_w / 2
+        parent_cursor = parent_start_x
+        for b in parent_blocks:
+            sid = b["anchor"]
+            sp = b["spouse"]
+            block_center = parent_cursor + b["width"] / 2
+            if sp:
+                coords[sid] = (block_center - spouse_gap / 2, y_parents)
+                if sp not in coords:
+                    coords[sp] = (block_center + spouse_gap / 2, y_parents)
+            else:
+                coords[sid] = (block_center, y_parents)
+            parent_cursor += b["width"]
+
+    if father_id and father_id not in coords:      
         coords[father_id] = (cx - spouse_gap / 2, y_parents)
-    if mother_id:
+    if mother_id and mother_id not in coords:
         coords[mother_id] = (cx + spouse_gap / 2, y_parents)
 
     if father_id in coords and mother_id in coords:
@@ -1033,16 +1072,18 @@ def structured_layout(people):
         fm = person_map[father_id].get("mother_id")
         if ff and fm:
             fx, _ = coords[father_id]
-            coords[ff] = (fx - upper_side_gap / 2, y_gp)
-            coords[fm] = (fx + upper_side_gap / 2, y_gp)
+            shift = upper_side_gap * 0.6 if (mother_id and mother_id in coords and person_map[mother_id].get("father_id") and person_map[mother_id].get("mother_id")) else 0
+            coords[ff] = (fx - upper_side_gap / 2 - shift, y_gp)
+            coords[fm] = (fx + upper_side_gap / 2 - shift, y_gp)
 
     if mother_id and mother_id in person_map:
         mf = person_map[mother_id].get("father_id")
         mm = person_map[mother_id].get("mother_id")
         if mf and mm:
             mx, _ = coords[mother_id]
-            coords[mf] = (mx - upper_side_gap / 2, y_gp)
-            coords[mm] = (mx + upper_side_gap / 2, y_gp)
+            shift = upper_side_gap * 0.6 if (father_id and father_id in coords and person_map[father_id].get("father_id") and person_map[father_id].get("mother_id")) else 0
+            coords[mf] = (mx - upper_side_gap / 2 + shift, y_gp)
+            coords[mm] = (mx + upper_side_gap / 2 + shift, y_gp)
 
     for b in blocks:
         fam_key = b["family_key"]
