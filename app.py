@@ -1198,24 +1198,7 @@ else:
                     except Exception as e:
                         st.error(f"保存失败：{e}")
 
-        # 快速跳转/补建（略简化：只保留跳转；补建仍在上方“创建父母/配偶”入口更稳）
-        st.markdown("##### 快速跳转")
-        j1, j2, j3 = st.columns(3)
-        with j1:
-            fid = clean_id(selected_row.get("father_id"))
-            if fid and fid in existing_ids and st.button(f"跳到父亲 {fid}", key=f"jt_f_{selected_id}"):
-                st.session_state.selected_person_id = fid
-                st.rerun()
-        with j2:
-            mid = clean_id(selected_row.get("mother_id"))
-            if mid and mid in existing_ids and st.button(f"跳到母亲 {mid}", key=f"jt_m_{selected_id}"):
-                st.session_state.selected_person_id = mid
-                st.rerun()
-        with j3:
-            sid = clean_id(selected_row.get("spouse_id"))
-            if sid and sid in existing_ids and st.button(f"跳到配偶 {sid}", key=f"jt_s_{selected_id}"):
-                st.session_state.selected_person_id = sid
-                st.rerun()
+    
 
     tab1, tab2, tab3, tab4 = st.tabs(["添加配偶/伴侣", "添加子女", "添加兄弟姐妹", "添加父母"])
 
