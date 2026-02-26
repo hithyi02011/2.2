@@ -94,52 +94,50 @@ def display_person(person_map, pid):
     return str(pid)
 
 # =============================
-# 中文亲属称呼解析（以患者为基准）
+# 中文亲属称呼解析 + 一键入图（以患者为基准）
 # =============================
 KINSHIP_ENTRIES = [
-    {"canonical":"本人","aliases":["我","自己","本人","患者"],"paths":[["本人"]],"generation":"同代"},
-    {"canonical":"配偶","aliases":["配偶","爱人","丈夫","妻子","老公","老婆"],"paths":[["配偶"]],"generation":"同代"},
+    {"canonical":"本人","aliases":["我","自己","本人","患者"],"generation":"同代","sex":"U","paths":[["本人"]]},
+    {"canonical":"配偶","aliases":["配偶","爱人","丈夫","妻子","老公","老婆"],"generation":"同代","sex":"U","paths":[["配偶"]]},
 
-    {"canonical":"父亲","aliases":["父亲","爸爸","父","爹"],"paths":[["父亲"]],"generation":"上1代"},
-    {"canonical":"母亲","aliases":["母亲","妈妈","母","娘"],"paths":[["母亲"]],"generation":"上1代"},
-    {"canonical":"公公","aliases":["公公"],"paths":[["配偶","父亲"]],"generation":"上1代（姻亲）"},
-    {"canonical":"婆婆","aliases":["婆婆"],"paths":[["配偶","母亲"]],"generation":"上1代（姻亲）"},
-    {"canonical":"岳父","aliases":["岳父","丈人"],"paths":[["配偶","父亲"]],"generation":"上1代（姻亲）"},
-    {"canonical":"岳母","aliases":["岳母"],"paths":[["配偶","母亲"]],"generation":"上1代（姻亲）"},
+    {"canonical":"父亲","aliases":["父亲","爸爸","父","爹"],"generation":"上1代","sex":"M","paths":[["父亲"]]},
+    {"canonical":"母亲","aliases":["母亲","妈妈","母","娘"],"generation":"上1代","sex":"F","paths":[["母亲"]]},
+    {"canonical":"公公/岳父","aliases":["公公","岳父","丈人"],"generation":"上1代（姻亲）","sex":"M","paths":[["配偶","父亲"]]},
+    {"canonical":"婆婆/岳母","aliases":["婆婆","岳母"],"generation":"上1代（姻亲）","sex":"F","paths":[["配偶","母亲"]]},
 
-    {"canonical":"祖父（爷爷）","aliases":["祖父","爷爷"],"paths":[["父亲","父亲"]],"generation":"上2代"},
-    {"canonical":"祖母（奶奶）","aliases":["祖母","奶奶"],"paths":[["父亲","母亲"]],"generation":"上2代"},
-    {"canonical":"外祖父（外公）","aliases":["外祖父","外公","姥爷"],"paths":[["母亲","父亲"]],"generation":"上2代"},
-    {"canonical":"外祖母（外婆）","aliases":["外祖母","外婆","姥姥"],"paths":[["母亲","母亲"]],"generation":"上2代"},
+    {"canonical":"祖父（爷爷）","aliases":["祖父","爷爷"],"generation":"上2代","sex":"M","paths":[["父亲","父亲"]]},
+    {"canonical":"祖母（奶奶）","aliases":["祖母","奶奶"],"generation":"上2代","sex":"F","paths":[["父亲","母亲"]]},
+    {"canonical":"外祖父（外公）","aliases":["外祖父","外公","姥爷"],"generation":"上2代","sex":"M","paths":[["母亲","父亲"]]},
+    {"canonical":"外祖母（外婆）","aliases":["外祖母","外婆","姥姥"],"generation":"上2代","sex":"F","paths":[["母亲","母亲"]]},
 
-    {"canonical":"哥哥","aliases":["哥哥","兄"],"paths":[["父母的年长儿子"]],"generation":"同代"},
-    {"canonical":"弟弟","aliases":["弟弟","弟"],"paths":[["父母的年幼儿子"]],"generation":"同代"},
-    {"canonical":"姐姐","aliases":["姐姐","姊姊","姐"],"paths":[["父母的年长女儿"]],"generation":"同代"},
-    {"canonical":"妹妹","aliases":["妹妹","妹"],"paths":[["父母的年幼女儿"]],"generation":"同代"},
+    {"canonical":"哥哥","aliases":["哥哥","兄"],"generation":"同代","sex":"M","paths":[["哥哥"]]},
+    {"canonical":"弟弟","aliases":["弟弟","弟"],"generation":"同代","sex":"M","paths":[["弟弟"]]},
+    {"canonical":"姐姐","aliases":["姐姐","姊姊","姐"],"generation":"同代","sex":"F","paths":[["姐姐"]]},
+    {"canonical":"妹妹","aliases":["妹妹","妹"],"generation":"同代","sex":"F","paths":[["妹妹"]]},
 
-    {"canonical":"伯父","aliases":["伯父","伯伯","大伯"],"paths":[["父亲","哥哥"]],"generation":"上1代（旁系）"},
-    {"canonical":"伯母","aliases":["伯母","大妈"],"paths":[["父亲","哥哥","配偶"]],"generation":"上1代（旁系姻亲）"},
-    {"canonical":"叔叔","aliases":["叔叔","叔父","小叔"],"paths":[["父亲","弟弟"]],"generation":"上1代（旁系）"},
-    {"canonical":"婶婶","aliases":["婶婶","婶母","婶子"],"paths":[["父亲","弟弟","配偶"]],"generation":"上1代（旁系姻亲）"},
-    {"canonical":"姑姑","aliases":["姑姑","姑妈","姑母"],"paths":[["父亲","姐妹"]],"generation":"上1代（旁系）"},
-    {"canonical":"姑父","aliases":["姑父"],"paths":[["父亲","姐妹","配偶"]],"generation":"上1代（旁系姻亲）"},
-    {"canonical":"舅舅","aliases":["舅舅","舅父","舅"],"paths":[["母亲","兄弟"]],"generation":"上1代（旁系）"},
-    {"canonical":"舅妈","aliases":["舅妈","舅母"],"paths":[["母亲","兄弟","配偶"]],"generation":"上1代（旁系姻亲）"},
-    {"canonical":"姨妈","aliases":["姨妈","阿姨","姨母"],"paths":[["母亲","姐妹"]],"generation":"上1代（旁系）"},
-    {"canonical":"姨父","aliases":["姨父","姨夫"],"paths":[["母亲","姐妹","配偶"]],"generation":"上1代（旁系姻亲）"},
+    {"canonical":"伯父","aliases":["伯父","伯伯","大伯"],"generation":"上1代（旁系）","sex":"M","paths":[["父亲","哥哥"]]},
+    {"canonical":"伯母","aliases":["伯母","大妈"],"generation":"上1代（旁系姻亲）","sex":"F","paths":[["父亲","哥哥","配偶"]]},
+    {"canonical":"叔叔","aliases":["叔叔","叔父","小叔"],"generation":"上1代（旁系）","sex":"M","paths":[["父亲","弟弟"]]},
+    {"canonical":"婶婶","aliases":["婶婶","婶母","婶子"],"generation":"上1代（旁系姻亲）","sex":"F","paths":[["父亲","弟弟","配偶"]]},
+    {"canonical":"姑姑","aliases":["姑姑","姑妈","姑母"],"generation":"上1代（旁系）","sex":"F","paths":[["父亲","姐妹"]]},
+    {"canonical":"姑父","aliases":["姑父"],"generation":"上1代（旁系姻亲）","sex":"M","paths":[["父亲","姐妹","配偶"]]},
+    {"canonical":"舅舅","aliases":["舅舅","舅父","舅"],"generation":"上1代（旁系）","sex":"M","paths":[["母亲","兄弟"]]},
+    {"canonical":"舅妈","aliases":["舅妈","舅母"],"generation":"上1代（旁系姻亲）","sex":"F","paths":[["母亲","兄弟","配偶"]]},
+    {"canonical":"姨妈","aliases":["姨妈","阿姨","姨母"],"generation":"上1代（旁系）","sex":"F","paths":[["母亲","姐妹"]]},
+    {"canonical":"姨父","aliases":["姨父","姨夫"],"generation":"上1代（旁系姻亲）","sex":"M","paths":[["母亲","姐妹","配偶"]]},
 
-    {"canonical":"儿子","aliases":["儿子"],"paths":[["儿子"]],"generation":"下1代"},
-    {"canonical":"女儿","aliases":["女儿","闺女"],"paths":[["女儿"]],"generation":"下1代"},
-    {"canonical":"女婿","aliases":["女婿"],"paths":[["女儿","配偶"]],"generation":"下1代（姻亲）"},
-    {"canonical":"儿媳","aliases":["儿媳","媳妇"],"paths":[["儿子","配偶"]],"generation":"下1代（姻亲）"},
+    {"canonical":"儿子","aliases":["儿子"],"generation":"下1代","sex":"M","paths":[["儿子"]]},
+    {"canonical":"女儿","aliases":["女儿","闺女"],"generation":"下1代","sex":"F","paths":[["女儿"]]},
+    {"canonical":"女婿","aliases":["女婿"],"generation":"下1代（姻亲）","sex":"M","paths":[["女儿","配偶"]]},
+    {"canonical":"儿媳","aliases":["儿媳","媳妇"],"generation":"下1代（姻亲）","sex":"F","paths":[["儿子","配偶"]]},
 
-    {"canonical":"侄子","aliases":["侄子"],"paths":[["兄弟","儿子"]],"generation":"下1代（旁系）"},
-    {"canonical":"侄女","aliases":["侄女"],"paths":[["兄弟","女儿"]],"generation":"下1代（旁系）"},
-    {"canonical":"外甥","aliases":["外甥"],"paths":[["姐妹","儿子"]],"generation":"下1代（旁系）"},
-    {"canonical":"外甥女","aliases":["外甥女"],"paths":[["姐妹","女儿"]],"generation":"下1代（旁系）"},
+    {"canonical":"侄子","aliases":["侄子"],"generation":"下1代（旁系）","sex":"M","paths":[["兄弟","儿子"]]},
+    {"canonical":"侄女","aliases":["侄女"],"generation":"下1代（旁系）","sex":"F","paths":[["兄弟","女儿"]]},
+    {"canonical":"外甥","aliases":["外甥"],"generation":"下1代（旁系）","sex":"M","paths":[["姐妹","儿子"]]},
+    {"canonical":"外甥女","aliases":["外甥女"],"generation":"下1代（旁系）","sex":"F","paths":[["姐妹","女儿"]]},
 
-    {"canonical":"堂兄弟姐妹","aliases":["堂哥","堂弟","堂姐","堂妹","堂兄","堂弟妹","堂兄弟姐妹"],"paths":[["父亲","兄弟","子女"]],"generation":"同代（旁系）"},
-    {"canonical":"表兄弟姐妹","aliases":["表哥","表弟","表姐","表妹","表兄弟姐妹"],"paths":[["母亲","兄弟姐妹","子女"],["父亲","姐妹","子女"]],"generation":"同代（旁系）"},
+    {"canonical":"堂兄弟姐妹","aliases":["堂哥","堂弟","堂姐","堂妹","堂兄","堂兄弟姐妹"],"generation":"同代（旁系）","sex":"U","paths":[["父亲","兄弟","子女"]]},
+    {"canonical":"表兄弟姐妹","aliases":["表哥","表弟","表姐","表妹","表兄弟姐妹"],"generation":"同代（旁系）","sex":"U","paths":[["母亲","兄弟姐妹","子女"],["父亲","姐妹","子女"]]},
 ]
 
 
@@ -153,6 +151,8 @@ def _normalize_kinship_term(term: str):
 
 
 def _path_to_text(path):
+    if path == ["本人"]:
+        return "患者本人"
     return "患者的" + "的".join(path)
 
 
@@ -183,6 +183,186 @@ def suggest_kinship_terms(prefix: str, limit=16):
         if x not in uniq:
             uniq.append(x)
     return uniq[:limit]
+
+
+def _find_children_ids(df: pd.DataFrame, parent_id: str, sex: str = None):
+    out = normalize_df_columns(df)
+    res = []
+    for _, row in out.iterrows():
+        fid = clean_id(row.get("father_id"))
+        mid = clean_id(row.get("mother_id"))
+        if parent_id in [fid, mid]:
+            pid = clean_id(row.get("id"))
+            if not pid:
+                continue
+            if sex and str(row.get("sex", "U")).upper() != sex:
+                continue
+            res.append(pid)
+    return res
+
+
+def _find_sibling_ids(df: pd.DataFrame, person_id: str, sex: str = None):
+    out = normalize_df_columns(df)
+    p = get_person_row_from_df(out, person_id)
+    if not p:
+        return []
+    fid = clean_id(p.get("father_id"))
+    mid = clean_id(p.get("mother_id"))
+    if not fid and not mid:
+        return []
+    res = []
+    for _, row in out.iterrows():
+        pid = clean_id(row.get("id"))
+        if not pid or pid == person_id:
+            continue
+        if clean_id(row.get("father_id")) == fid and clean_id(row.get("mother_id")) == mid:
+            if sex and str(row.get("sex", "U")).upper() != sex:
+                continue
+            res.append(pid)
+    return res
+
+
+def _default_name_for_step(step: str):
+    return {
+        "父亲": "父亲", "母亲": "母亲", "配偶": "配偶", "哥哥": "哥哥", "弟弟": "弟弟", "姐姐": "姐姐", "妹妹": "妹妹",
+        "兄弟": "兄弟", "姐妹": "姐妹", "兄弟姐妹": "兄弟姐妹", "儿子": "儿子", "女儿": "女儿", "子女": "子女"
+    }.get(step, step)
+
+
+def _default_sex_for_step(step: str):
+    mapping = {
+        "父亲": "M", "母亲": "F", "哥哥": "M", "弟弟": "M", "兄弟": "M", "姐姐": "F", "妹妹": "F", "姐妹": "F",
+        "儿子": "M", "女儿": "F"
+    }
+    return mapping.get(step, "U")
+
+
+def _ensure_parent(df: pd.DataFrame, child_id: str, role: str):
+    out = normalize_df_columns(df)
+    child = get_person_row_from_df(out, child_id)
+    if not child:
+        raise ValueError("人物不存在。")
+    col = "father_id" if role == "父亲" else "mother_id"
+    current = clean_id(child.get(col))
+    if current:
+        return out, current
+    pname = _default_name_for_step(role)
+    psex = _default_sex_for_step(role)
+    out, pid = add_person_row(out, name=pname, sex=psex)
+    out = set_parent_id_safe(out, child_id, col, pid)
+    return out, pid
+
+
+def _ensure_spouse(df: pd.DataFrame, person_id: str):
+    out = normalize_df_columns(df)
+    row = get_person_row_from_df(out, person_id)
+    if not row:
+        raise ValueError("人物不存在。")
+    sid = clean_id(row.get("spouse_id"))
+    if sid:
+        return out, sid
+    sex = str(row.get("sex", "U")).upper()
+    spouse_sex = "F" if sex == "M" else ("M" if sex == "F" else "U")
+    out, sid = add_person_row(out, name="配偶", sex=spouse_sex)
+    out = set_spouse_relation_safe(out, person_id, sid)
+    return out, sid
+
+
+def _create_sibling(df: pd.DataFrame, person_id: str, step: str):
+    out = normalize_df_columns(df)
+    base = get_person_row_from_df(out, person_id)
+    if not base:
+        raise ValueError("人物不存在。")
+    out, sib_id = add_person_row(
+        out,
+        name=_default_name_for_step(step),
+        sex=_default_sex_for_step(step),
+        father_id=clean_id(base.get("father_id")) or "",
+        mother_id=clean_id(base.get("mother_id")) or ""
+    )
+    return out, sib_id
+
+
+def _create_child(df: pd.DataFrame, person_id: str, step: str):
+    out = normalize_df_columns(df)
+    base = get_person_row_from_df(out, person_id)
+    if not base:
+        raise ValueError("人物不存在。")
+    sex = str(base.get("sex", "U")).upper()
+    father_id, mother_id = "", ""
+    if sex == "M":
+        father_id = person_id
+    elif sex == "F":
+        mother_id = person_id
+    else:
+        father_id = person_id
+    out, child_id = add_person_row(
+        out,
+        name=_default_name_for_step(step),
+        sex=_default_sex_for_step(step),
+        father_id=father_id,
+        mother_id=mother_id,
+    )
+    return out, child_id
+
+
+def add_person_by_kinship_path(df: pd.DataFrame, proband_id: str, path, target_name: str, target_sex: str, target_affected: bool, target_deceased: bool):
+    out = normalize_df_columns(df)
+    current_id = proband_id
+
+    if path == ["本人"]:
+        out = update_person_fields(out, proband_id, name=target_name, sex=target_sex, affected=target_affected, deceased=target_deceased)
+        return out, proband_id, False
+
+    for i, step in enumerate(path):
+        is_last = i == len(path) - 1
+
+        if step in ["父亲", "母亲"]:
+            out, next_id = _ensure_parent(out, current_id, step)
+            current_id = next_id
+            if is_last:
+                out = update_person_fields(out, current_id, name=target_name, sex=target_sex, affected=target_affected, deceased=target_deceased)
+                return out, current_id, False
+            continue
+
+        if step == "配偶":
+            out, next_id = _ensure_spouse(out, current_id)
+            current_id = next_id
+            if is_last:
+                out = update_person_fields(out, current_id, name=target_name, sex=target_sex, affected=target_affected, deceased=target_deceased)
+                return out, current_id, False
+            continue
+
+        if step in ["哥哥", "弟弟", "姐姐", "妹妹", "兄弟", "姐妹", "兄弟姐妹"]:
+            if is_last:
+                out, new_id = _create_sibling(out, current_id, step)
+                out = update_person_fields(out, new_id, name=target_name, sex=target_sex, affected=target_affected, deceased=target_deceased)
+                return out, new_id, True
+            # 中间节点尽量复用，否则创建
+            desired_sex = _default_sex_for_step(step)
+            cands = _find_sibling_ids(out, current_id, None if desired_sex == "U" else desired_sex)
+            if cands:
+                current_id = cands[0]
+            else:
+                out, current_id = _create_sibling(out, current_id, step)
+            continue
+
+        if step in ["儿子", "女儿", "子女"]:
+            if is_last:
+                out, new_id = _create_child(out, current_id, step)
+                out = update_person_fields(out, new_id, name=target_name, sex=target_sex, affected=target_affected, deceased=target_deceased)
+                return out, new_id, True
+            desired_sex = _default_sex_for_step(step)
+            cands = _find_children_ids(out, current_id, None if desired_sex == "U" else desired_sex)
+            if cands:
+                current_id = cands[0]
+            else:
+                out, current_id = _create_child(out, current_id, step)
+            continue
+
+        raise ValueError(f"暂不支持的关系步骤：{step}")
+
+    raise ValueError("关系路径解析失败。")
 
 
 # =============================
@@ -1134,33 +1314,77 @@ with c3:
 with c4:
     use_spouse_candidate_confirm = st.checkbox("共同子女生成配偶候选（需确认）", value=True)
 
-st.markdown("## 中文亲属称呼智能转换（以患者为基准）")
-with st.expander("输入称呼，自动解释‘他/她是患者的谁’", expanded=False):
-    st.caption("覆盖范围：尽可能包含上两代、下1代及常见旁系称呼。示例：婶婶 / 舅妈 / 堂姐 / 外甥女。")
-    kinship_term = st.text_input("输入亲属称呼", value="", placeholder="例如：婶婶")
+st.markdown("## 中文亲属称呼一键入图（以患者为基准）")
+with st.expander("输入称呼并直接创建人物", expanded=False):
+    st.caption("输入称呼后，系统会识别该人物与患者关系；你可填写姓名、患病/死亡并直接加入家系图。")
 
-    if kinship_term.strip():
-        matches = parse_kinship_term(kinship_term)
+    people_now = df_to_people(normalize_df_columns(st.session_state.pedigree_df))
+    proband_id_now = find_proband_id(people_now)
+    if not proband_id_now:
+        st.warning("当前还没有患者（proband=True）。请先在下方人物编辑区勾选一位患者。")
+    else:
+        kinship_term = st.text_input("输入亲属称呼", value="", placeholder="例如：婶婶")
+        matches = parse_kinship_term(kinship_term) if kinship_term.strip() else []
+
+        if kinship_term.strip() and not matches:
+            st.warning("未找到该称呼映射，请尝试：" + "、".join(suggest_kinship_terms(kinship_term) or ["父亲", "母亲", "婶婶", "舅舅"]))
+
         if matches:
-            for idx, m in enumerate(matches, start=1):
-                st.markdown(f"**{idx}. {m['canonical']}**（代际：{m['generation']}）")
+            option_pairs = []
+            option_to_meta = {}
+            for m in matches:
                 for pth in m["paths"]:
-                    st.write(f"- {_path_to_text(pth)}")
-        else:
-            st.warning("未找到该称呼的标准映射。你可以换个常见叫法，或查看下面的联想词。")
+                    label = f"{m['canonical']} ｜ {_path_to_text(pth)}"
+                    option_pairs.append(label)
+                    option_to_meta[label] = (m, pth)
 
-        suggestions = suggest_kinship_terms(kinship_term)
-        if suggestions:
-            st.caption("你可能想输入：" + "、".join(suggestions))
+            selected_option = st.selectbox("选择具体关系路径", options=option_pairs, key="kinship_selected_path")
+            selected_entry, selected_path = option_to_meta[selected_option]
 
-    with st.popover("查看支持的称呼（完整列表）"):
-        grouped = {}
-        for e in KINSHIP_ENTRIES:
-            grouped.setdefault(e["generation"], []).append(e)
-        for g in ["上2代", "上1代", "上1代（旁系）", "上1代（旁系姻亲）", "上1代（姻亲）", "同代", "同代（旁系）", "下1代", "下1代（旁系）", "下1代（姻亲）"]:
-            if g in grouped:
-                st.markdown(f"**{g}**")
-                st.write("、".join(sorted({x["canonical"] for x in grouped[g]})))
+            st.info(f"将创建：{_path_to_text(selected_path)}")
+            k1, k2, k3, k4 = st.columns([2, 1, 1, 1])
+            with k1:
+                new_person_name = st.text_input("该亲属姓名/称谓", value=selected_entry["canonical"], key="kinship_new_name")
+            with k2:
+                sex_default = selected_entry.get("sex", "U")
+                idx = ["M", "F", "U"].index(sex_default if sex_default in ["M", "F", "U"] else "U")
+                new_person_sex = st.selectbox("性别", options=["M", "F", "U"], index=idx, key="kinship_new_sex")
+            with k3:
+                new_person_affected = st.checkbox("患病", value=False, key="kinship_new_aff")
+            with k4:
+                new_person_deceased = st.checkbox("死亡", value=False, key="kinship_new_dec")
+
+            if st.button("按该称呼加入家系图", type="primary"):
+                try:
+                    if not new_person_name.strip():
+                        raise ValueError("请填写姓名/称谓。")
+                    new_df, new_id, created_new = add_person_by_kinship_path(
+                        st.session_state.pedigree_df,
+                        proband_id_now,
+                        selected_path,
+                        target_name=new_person_name.strip(),
+                        target_sex=new_person_sex,
+                        target_affected=new_person_affected,
+                        target_deceased=new_person_deceased,
+                    )
+                    st.session_state.pedigree_df = normalize_df_columns(new_df)
+                    st.session_state.selected_person_id = new_id
+                    if created_new:
+                        st.success(f"已新增人物：{new_person_name}（{new_id}）。")
+                    else:
+                        st.success(f"已更新关系位对应人物：{new_person_name}（{new_id}）。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"加入失败：{e}")
+
+        with st.popover("查看支持的称呼（完整列表）"):
+            grouped = {}
+            for e in KINSHIP_ENTRIES:
+                grouped.setdefault(e["generation"], []).append(e)
+            for g in ["上2代", "上1代", "上1代（旁系）", "上1代（旁系姻亲）", "上1代（姻亲）", "同代", "同代（旁系）", "下1代", "下1代（旁系）", "下1代（姻亲）"]:
+                if g in grouped:
+                    st.markdown(f"**{g}**")
+                    st.write("、".join(sorted({x["canonical"] for x in grouped[g]})))
 
 
 st.markdown("## B 模式：围绕人物添加/编辑关系（推荐）")
