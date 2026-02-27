@@ -167,6 +167,40 @@ def parse_kinship_term(term: str):
             hits.append(entry)
     return hits
 
+def infer_kinship_sex(entry: dict, path, raw_term: str, proband_sex: str = "U"):
+    """根据称呼/路径推断目标人物性别。"""
+    sex = (entry or {}).get("sex", "U")
+    if sex in ["M", "F"]:
+        return sex
+
+    key = _normalize_kinship_term(raw_term)
+    alias_map = {
+        "丈夫": "M", "老公": "M", "妻子": "F", "老婆": "F",
+        "堂哥": "M", "堂弟": "M", "堂兄": "M", "堂姐": "F", "堂妹": "F",
+        "表哥": "M", "表弟": "M", "表姐": "F", "表妹": "F",
+    }
+    if key in alias_map:
+        return alias_map[key]
+
+    if path:
+        last = path[-1]
+        sex_from_step = _default_sex_for_step(last)
+        if sex_from_step in ["M", "F"]:
+            return sex_from_step
+
+    # “配偶”可根据患者性别反推
+    proband = str(proband_sex or "U").upper()
+    if key in ["配偶", "爱人", "丈夫", "妻子", "老公", "老婆"]:
+        if proband == "M":
+            return "F"
+        if proband == "F":
+            return "M"
+
+    return "U"
+
+
+def sex_label(sex_code: str):
+    return {"M": "男", "F": "女", "U": "未知"}.get(str(sex_code).upper(), "未知")
 
 def suggest_kinship_terms(prefix: str, limit=16):
     key = _normalize_kinship_term(prefix)
@@ -1364,6 +1398,8 @@ with st.expander("输入称呼并直接创建人物", expanded=False):
     if not proband_id_now:
         st.warning("当前还没有患者（proband=True）。请先在下方人物编辑区勾选一位患者。")
     else:
+        proband_row = get_person_row_from_df(st.session_state.pedigree_df, proband_id_now)
+        proband_sex = str((proband_row or {}).get("sex", "U")).upper()
         kinship_term = st.text_input("输入亲属称呼", value="", placeholder="例如：婶婶")
         matches = parse_kinship_term(kinship_term) if kinship_term.strip() else []
 
@@ -1381,13 +1417,14 @@ with st.expander("输入称呼并直接创建人物", expanded=False):
 
             selected_option = st.selectbox("选择具体关系路径", options=option_pairs, key="kinship_selected_path")
             selected_entry, selected_path = option_to_meta[selected_option]
+            inferred_sex = infer_kinship_sex(selected_entry, selected_path, kinship_term, proband_sex=proband_sex)
 
-            st.info(f"将创建：{_path_to_text(selected_path)}")
+            st.info(f"将创建：{_path_to_text(selected_path)}（识别性别：{sex_label(inferred_sex)}）")
             k1, k2, k3, k4 = st.columns([2, 1, 1, 1])
             with k1:
                 new_person_name = st.text_input("该亲属姓名/称谓", value=selected_entry["canonical"], key="kinship_new_name")
             with k2:
-                sex_default = selected_entry.get("sex", "U")
+                sex_default = inferred_sex
                 idx = ["M", "F", "U"].index(sex_default if sex_default in ["M", "F", "U"] else "U")
                 new_person_sex = st.selectbox("性别", options=["M", "F", "U"], index=idx, key="kinship_new_sex")
             with k3:
