@@ -1424,9 +1424,8 @@ with st.expander("输入称呼并直接创建人物", expanded=False):
             with k1:
                 new_person_name = st.text_input("该亲属姓名/称谓", value=selected_entry["canonical"], key="kinship_new_name")
             with k2:
-                sex_default = inferred_sex
-                idx = ["M", "F", "U"].index(sex_default if sex_default in ["M", "F", "U"] else "U")
-                new_person_sex = st.selectbox("性别", options=["M", "F", "U"], index=idx, key="kinship_new_sex")
+                new_person_sex = inferred_sex if inferred_sex in ["M", "F", "U"] else "U"
+                st.markdown(f"**性别（自动识别）**：`{new_person_sex}`")
             with k3:
                 new_person_affected = st.checkbox("患病", value=False, key="kinship_new_aff")
             with k4:
